@@ -1,0 +1,190 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ─── TAILWIND THEME BRIDGE ──────────────────────────────────────────────── */
+@theme inline {
+  --color-background:           var(--background);
+  --color-foreground:           var(--foreground);
+  --color-card:                 var(--card);
+  --color-card-foreground:      var(--card-foreground);
+  --color-popover:              var(--popover);
+  --color-popover-foreground:   var(--popover-foreground);
+  --color-primary:              var(--primary);
+  --color-primary-foreground:   var(--primary-foreground);
+  --color-secondary:            var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:                var(--muted);
+  --color-muted-foreground:     var(--muted-foreground);
+  --color-accent:               var(--accent);
+  --color-accent-foreground:    var(--accent-foreground);
+  --color-destructive:          var(--destructive);
+  --color-border:               var(--border);
+  --color-input:                var(--input);
+  --color-ring:                 var(--ring);
+  --color-green:                var(--clr-green);
+  --color-yellow:               var(--clr-yellow);
+  --color-ai:                   var(--clr-ai);
+  --font-sans:                  var(--font-geist-sans);
+  --font-mono:                  var(--font-geist-mono);
+  --radius-sm:  calc(var(--radius) * 0.6);
+  --radius-md:  calc(var(--radius) * 0.8);
+  --radius-lg:  var(--radius);
+  --radius-xl:  calc(var(--radius) * 1.4);
+  --color-sidebar-ring:                 var(--sidebar-ring);
+  --color-sidebar-border:               var(--sidebar-border);
+  --color-sidebar-accent-foreground:    var(--sidebar-accent-foreground);
+  --color-sidebar-accent:               var(--sidebar-accent);
+  --color-sidebar-primary-foreground:   var(--sidebar-primary-foreground);
+  --color-sidebar-primary:              var(--sidebar-primary);
+  --color-sidebar-foreground:           var(--sidebar-foreground);
+  --color-sidebar:                      var(--sidebar);
+}
+
+/* ─── PNCP DESIGN TOKENS (dark-first) ───────────────────────────────────── */
+:root {
+  /* Shadcn overrides — mapeados para nossa paleta escura */
+  --background:          #0a0a0f;
+  --foreground:          #f0f0f8;
+  --card:                #0f0f18;
+  --card-foreground:     #f0f0f8;
+  --popover:             #0f0f18;
+  --popover-foreground:  #f0f0f8;
+  --primary:             #4f8ef7;
+  --primary-foreground:  #0a0a0f;
+  --secondary:           #1a1a28;
+  --secondary-foreground:#f0f0f8;
+  --muted:               #1a1a28;
+  --muted-foreground:    rgba(240,240,248,0.55);
+  --accent:              #4f8ef7;
+  --accent-foreground:   #0a0a0f;
+  --destructive:         #f25f5c;
+  --border:              rgba(79,142,247,0.12);
+  --input:               rgba(79,142,247,0.10);
+  --ring:                #4f8ef7;
+  --radius:              0.875rem;
+
+  /* Sidebar */
+  --sidebar:                    #0c0c14;
+  --sidebar-foreground:         #f0f0f8;
+  --sidebar-primary:            #4f8ef7;
+  --sidebar-primary-foreground: #0a0a0f;
+  --sidebar-accent:             #1a1a28;
+  --sidebar-accent-foreground:  #f0f0f8;
+  --sidebar-border:             rgba(79,142,247,0.10);
+  --sidebar-ring:               #4f8ef7;
+
+  /* PNCP custom tokens */
+  --accent-2:      #7eb3ff;
+  --accent-rgb:    79, 142, 247;
+  --accent-grad:   linear-gradient(135deg, #4f8ef7 0%, #7eb3ff 100%);
+  --clr-green:     #3ecf8e;
+  --clr-green-rgb: 62, 207, 142;
+  --clr-yellow:    #f5a623;
+  --clr-yellow-rgb:245, 166, 35;
+  --clr-red:       #f25f5c;
+  --clr-ai:        #a78bfa;
+  --clr-ai-rgb:    167, 139, 250;
+  --ai-grad:       linear-gradient(135deg, #a78bfa 0%, #c4b5fd 100%);
+
+  --text-muted:    rgba(240,240,248,0.55);
+  --text-dim:      rgba(240,240,248,0.30);
+  --border-hover:  rgba(79,142,247,0.35);
+  --bg-card:       rgba(15,15,24,0.80);
+  --glass-bg:      rgba(15,15,24,0.70);
+  --glass-blur:    blur(20px) saturate(150%);
+
+  --glow-sm: 0 0 8px  rgba(79,142,247,0.55), 0 0 24px rgba(79,142,247,0.25);
+  --glow-md: 0 0 18px rgba(79,142,247,0.65), 0 0 40px rgba(79,142,247,0.30), 0 0 80px rgba(79,142,247,0.12);
+  --glow-green: 0 0 12px rgba(62,207,142,0.50), 0 0 32px rgba(62,207,142,0.20);
+  --glow-ai:    0 0 12px rgba(167,139,250,0.50), 0 0 32px rgba(167,139,250,0.20);
+
+  --nav-h:       64px;
+  --sidebar-w:   220px;
+}
+
+/* ─── BASE ───────────────────────────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+    @apply border-border outline-ring/50;
+  }
+  html {
+    scroll-behavior: smooth;
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  input, textarea, select { font-family: inherit; }
+  img { display: block; max-width: 100%; }
+}
+
+/* ─── SCROLLBAR ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--background); }
+::-webkit-scrollbar-thumb { background: var(--accent-grad); border-radius: 99px; }
+
+/* ─── GLASS ──────────────────────────────────────────────────────────────── */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* ─── GRID SURFACE TEXTURE ───────────────────────────────────────────────── */
+.grid-surface {
+  background-image:
+    linear-gradient(rgba(79,142,247,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79,142,247,0.05) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* ─── AMBIENT ORBS ───────────────────────────────────────────────────────── */
+.orb {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(100px);
+  pointer-events: none;
+  will-change: transform;
+  animation: orb-float 10s ease-in-out infinite alternate;
+}
+.orb-1 { width:500px; height:500px; top:-120px; left:-100px;  background:var(--primary);  opacity:0.08; animation-delay:0s; }
+.orb-2 { width:400px; height:400px; top:40%;    right:-120px; background:var(--clr-ai);   opacity:0.07; animation-delay:-4s; }
+.orb-3 { width:300px; height:300px; bottom:-80px; left:35%;   background:var(--clr-green);opacity:0.06; animation-delay:-7s; }
+
+@keyframes orb-float {
+  from { transform: translateY(0)    scale(1);    }
+  to   { transform: translateY(-40px) scale(1.06); }
+}
+
+/* ─── AI PULSE BORDER (momento assinatura) ───────────────────────────────── */
+@property --border-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.ai-pulse-border {
+  --border-angle: 0deg;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
+    conic-gradient(
+      from var(--border-angle),
+      transparent 60%,
+      var(--clr-ai) 75%,
+      var(--primary) 85%,
+      transparent 100%
+    ) border-box;
+  animation: border-spin 2.5s linear infinite;
+  border-radius: var(--radius);
+}
+
+@keyframes border-spin { to { --border-angle: 360deg; } }

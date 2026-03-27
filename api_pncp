@@ -1,0 +1,777 @@
+Vou montar um plano profundo e detalhado para você explorar o PNCP como um agente inteligente de inteligência comercial!Aqui está o plano completo. Deixa eu montar um dashboard visual interativo explicando toda a arquitetura do agente:Agora o plano detalhado completo:
+
+---
+
+## Plano profundo: Agente de Inteligência PNCP para Software
+
+### 1. Endpoints da API e o que cada campo vale
+
+**Search principal** (`/api/search?q=autodesk&tipos_documento=edital&...`):
+
+![alt text](image.png)
+
+Os campos mais críticos dos resultados que você já tem:
+
+- `numero_controle_pncp` — chave única global. Formato: `CNPJ-modalidade-sequencial/ano`. Use como ID primário no banco.
+- `orgao_cnpj` + `numero_sequencial` + `ano` — trio que monta todas as URLs filhas da API.
+- `data_fim_vigencia` — data de encerramento. Um edital que fecha daqui a 10 dias é hot lead. Filtre e ordene por isso.
+- `tem_resultado: true` — edital já teve vencedor. Isso é **ouro**: você descobre quem ganhou, por qual preço, e pode mapear quem domina o mercado de revenda de cada software.
+- `modalidade_licitacao_nome` — "Dispensa" e "Inexigibilidade" significam contratação direta, menos concorrência, ticket geralmente menor. "Pregão Eletrônico" é o grande volume.
+- `esfera_id` (F=Federal, E=Estadual, M=Municipal) — municipal é o mercado mais fragmentado e com menos concorrência especializada.
+
+**Itens do edital** (`/orgaos/{cnpj}/compras/{ano}/{seq}/itens`):
+
+- `descricao` — aqui está o nome real do produto. O campo da busca é genérico ("Software"), mas aqui pode aparecer "AutoCAD LT 2025 subscription anual".
+- `valorUnitarioEstimado` + `quantidade` → `valorTotal` — o orçamento. Quando `orcamentoSigiloso: true` (como nos exemplos), você não tem o valor, mas pode cruzar com histórico de editais similares para estimar.
+- `ncmNbsCodigo` — código fiscal. `84714900` = software. Você pode filtrar toda a base por isso para achar editais de software que não mencionam "autodesk" na busca.
+- `situacaoCompraItem` — `1 = Em andamento`, outros valores = encerrado. Foque nos ativos.
+
+**Documentos** (`/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos`): retorna lista de PDFs. Cada um tem URL para download direto. É aqui que entra o Gemini.
+
+---
+
+### 2. Pipeline de coleta — como implementar
+
+```
+Passo 1: Busca ampla
+  GET /api/search?q=software+licença&tipos_documento=edital
+                 &ordenacao=-data&tam_pagina=50&pagina=1..N
+  → Iterar páginas enquanto total > page*tam
+
+Passo 2: Para cada edital novo (não visto antes)
+  GET /orgaos/{cnpj}/compras/{ano}/{seq}/itens
+  GET /orgaos/{cnpj}/compras/{ano}/{seq}/arquivos  ← lista de PDFs
+
+Passo 3: Para editais com resultado
+  GET /orgaos/{cnpj}/compras/{ano}/{seq}/resultado
+  → Salva vencedor, CNPJ fornecedor, valor final
+
+Passo 4: Download PDF do edital (arquivo tipo "Edital")
+  → Envia para Gemini para extração estruturada
+```
+
+---
+
+### 3. Gemini para leitura de PDFs — como usar
+
+O edital em PDF contém o que a API não tem: especificações técnicas, critérios de habilitação, marca exigida, prazo de vigência do contrato, e muitas vezes o preço real (mesmo quando `orcamentoSigiloso: true` na API, o PDF às vezes tem o valor no Termo de Referência).
+
+**Prompt ideal para o Gemini:**
+
+```
+Você é um analisador de editais de licitação pública brasileira.
+Extraia do edital em PDF os seguintes dados em JSON:
+
+{
+  "software_nome": "nome comercial do software",
+  "fabricante": "empresa fabricante",
+  "tipo_licenca": "subscription|perpetua|saas|volume",
+  "quantidade": número,
+  "prazo_meses": número,
+  "valor_estimado_total": número ou null,
+  "valor_unitario": número ou null,
+  "orcamento_sigiloso": boolean,
+  "requisitos_tecnicos": ["lista"],
+  "marca_exigida": boolean,
+  "justificativa_marca": "texto se exigida",
+  "habilitacao_tecnica": "exigências para participar",
+  "criterio_julgamento": "menor_preco|melhor_tecnica",
+  "permite_equivalente": boolean,
+  "orgao_uso": "departamento interno que vai usar"
+}
+```
+
+Use `gemini-2.0-flash` com `generateContent` passando o PDF em base64. O modelo lida nativamente com PDF.
+
+---
+
+### 4. Queries de inteligência de mercado
+
+Com a base montada, as perguntas que geram valor comercial:
+
+**Ranking de demanda:**
+```sql
+SELECT software_nome, COUNT(*) as editais, SUM(quantidade) as licencas_total
+FROM itens_processados
+WHERE data_publicacao > NOW() - INTERVAL '12 months'
+GROUP BY software_nome ORDER BY editais DESC LIMIT 20
+```
+
+**Ciclo de renovação por órgão:**
+```sql
+SELECT orgao_nome, software_nome,
+       MAX(data_fim_vigencia) as ultimo_contrato,
+       AVG(prazo_meses) as prazo_medio
+FROM historico WHERE tem_resultado = true
+GROUP BY orgao_nome, software_nome
+-- órgão que comprou AutoCAD há 11 meses → renovação iminente
+```
+
+**Oportunidades abertas agora:**
+```sql
+SELECT * FROM editais
+WHERE data_fim_vigencia BETWEEN NOW() AND NOW() + INTERVAL '15 days'
+AND software_categoria = 'CAD/BIM'
+AND situacao_id = 1
+ORDER BY data_fim_vigencia ASC
+```
+
+**Quem domina como fornecedor:**
+```sql
+SELECT fornecedor_cnpj, fornecedor_nome, COUNT(*) as contratos_ganhos,
+       SUM(valor_final) as receita_total
+FROM resultados JOIN editais USING(numero_controle_pncp)
+WHERE software_nome ILIKE '%autodesk%'
+GROUP BY 1,2 ORDER BY 3 DESC
+```
+
+---
+
+### 5. Score de oportunidade — como calcular
+
+Para cada edital novo, calcule um score 0–100:
+
+| Critério | Peso | Lógica |
+|---|---|---|
+| Prazo para encerrar | 30 | 7–15 dias = 100pts, <3 dias = 0 |
+| Valor estimado | 25 | Acima de R$50k = max |
+| Órgão sem fornecedor fixo | 20 | Sem vencedor repetido = oportunidade |
+| Esfera municipal | 15 | Menos concorrência especializada |
+| Sem exigência de marca | 10 | Permite equivalente = mais competição |
+
+---
+
+### 6. Estratégia de queries de busca — além do "autodesk"
+
+Busque por categorias, não só marcas:
+
+- `licença software` → volume geral
+- `BIM building information` → nicho AEC
+- `GIS georreferenciamento` → nicho geo
+- `ERP sistema gestão` → maior volume absoluto
+- `antivirus endpoint protection` → recorrente todo ano
+- `autocad revit archicad` → concorrentes, mapeia o mercado inteiro
+- NCM `84714900` nos filtros → pega tudo classificado como software
+
+---
+
+### 7. Stack recomendada para montar o agente
+
+```
+Coleta:     Python + httpx (async) + SQLite/PostgreSQL
+Scheduler:  APScheduler ou cron → roda a cada 6h
+PDF:        google-generativeai SDK → Gemini 2.0 Flash
+Embeddings: text-embedding-004 (Google) ou OpenAI
+Vector DB:  ChromaDB (local) ou Qdrant (self-hosted)
+Dashboard:  Streamlit ou Metabase apontando pro banco
+Alertas:    SMTP simples ou webhook Slack/Telegram
+```
+
+O agente roda sozinho: acorda, busca editais novos, processa PDFs com Gemini, calcula scores, e manda alerta com resumo em português para o canal do time. Quer que eu monte o código de algum desses módulos?
+
+para análise de demanda de software
+
+22:16
+O ERD (diagrama entidade-relacionamento) é exatamente o que serve aqui. Vou montar o schema completo com todas as tabelas pensadas especificamente para análise de demanda de software no PNCP.
+
+
+
+Agora o raciocínio por trás de cada decisão de design:
+
+Por que esse schema — decisão a decisão
+orgaos separado de editais
+
+O mesmo órgão publica dezenas de editais por ano. Normalizar evita repetir nome, UF e esfera em cada linha. Mais importante: permite a query "qual prefeitura mais compra software CAD" sem GROUP BY em texto duplicado.
+
+editais com status_coleta e coletado_em
+
+Esses dois campos não vêm da API — você os cria. Valores: pendente → coletando → completo → erro. Permitem retomar coletas interrompidas sem reprocessar tudo e medir latência entre publicação e sua coleta.
+
+itens com dois campos de descrição
+
+descricao_raw é exatamente o que a API retorna (às vezes só "Software"). software_nome e fabricante são os campos limpos, preenchidos depois pela IA. Nunca sobrescreva o raw — ele é a fonte da verdade para re-extração.
+
+documentos + extracao_ia separados
+
+Um documento pode ser reprocessado com modelos diferentes ou prompts melhorados. Separar permite versionar extrações: você guarda modelo_ia = "gemini-2.0-flash" e confianca = 0.87, e pode comparar qual modelo extrai melhor sem perder o histórico.
+
+software_catalog como tabela de referência
+
+AutoCAD aparece nos editais como "AutoCAD", "AUTO CAD LT", "Autodesk AutoCAD 2025", "SOFTWARE AUTOCAD". O catálogo normaliza tudo para um nome_normalizado, com um campo aliases text[] (array nativo do PostgreSQL) contendo as variantes conhecidas. É essa tabela que alimenta o ranking de demanda.
+
+demanda_diaria como tabela de agregação pré-computada
+
+Calcular "quantos editais de AutoCAD estão abertos hoje" na hora é lento conforme a base cresce. Essa tabela materializa esse número diariamente via job. Dashboards consultam ela, não a editais diretamente.
+
+resultados para inteligência competitiva
+
+Quando tem_resultado = true na API, você faz uma chamada extra para o endpoint de resultado e salva aqui. É a única forma de saber quem ganhou o pregão, por qual valor, e em quantas parcelas — o dado mais valioso para precificação e prospecção.
+
+DDL pronto para usar
+sql
+CREATE TABLE orgaos (
+  cnpj          TEXT PRIMARY KEY,
+  nome          TEXT NOT NULL,
+  esfera_id     CHAR(1),
+  poder_id      CHAR(1),
+  uf            CHAR(2),
+  municipio_id  INT,
+  municipio_nome TEXT
+);
+
+CREATE TABLE editais (
+  numero_controle_pncp TEXT PRIMARY KEY,
+  orgao_cnpj           TEXT REFERENCES orgaos(cnpj),
+  ano                  SMALLINT,
+  numero_sequencial    INT,
+  modalidade_nome      TEXT,
+  situacao_nome        TEXT,
+  tipo_nome            TEXT,
+  data_publicacao      TIMESTAMPTZ,
+  data_fim_vigencia    TIMESTAMPTZ,
+  tem_resultado        BOOLEAN DEFAULT FALSE,
+  cancelado            BOOLEAN DEFAULT FALSE,
+  valor_global         NUMERIC(15,2),
+  status_coleta        TEXT DEFAULT 'pendente',
+  coletado_em          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE itens (
+  id                       SERIAL PRIMARY KEY,
+  numero_controle_pncp     TEXT REFERENCES editais,
+  numero_item              SMALLINT,
+  descricao_raw            TEXT,
+  software_nome            TEXT,
+  fabricante               TEXT,
+  tipo_licenca             TEXT,
+  quantidade               NUMERIC(10,4),
+  valor_unitario_estimado  NUMERIC(15,2),
+  valor_total              NUMERIC(15,2),
+  orcamento_sigiloso       BOOLEAN,
+  ncm_codigo               TEXT,
+  situacao_nome            TEXT,
+  tem_resultado            BOOLEAN DEFAULT FALSE,
+  UNIQUE (numero_controle_pncp, numero_item)
+);
+
+CREATE TABLE documentos (
+  id                   SERIAL PRIMARY KEY,
+  numero_controle_pncp TEXT REFERENCES editais,
+  sequencial           INT,
+  tipo                 TEXT,
+  titulo               TEXT,
+  url_download         TEXT,
+  status_processamento TEXT DEFAULT 'pendente',
+  processado_em        TIMESTAMPTZ
+);
+
+CREATE TABLE extracao_ia (
+  id               SERIAL PRIMARY KEY,
+  documento_id     INT REFERENCES documentos UNIQUE,
+  software_nome    TEXT,
+  fabricante       TEXT,
+  tipo_licenca     TEXT,
+  prazo_meses      SMALLINT,
+  valor_estimado   NUMERIC(15,2),
+  marca_exigida    BOOLEAN,
+  permite_equiv    BOOLEAN,
+  requisitos_json  JSONB,
+  confianca        NUMERIC(3,2),
+  modelo_ia        TEXT,
+  criado_em        TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE resultados (
+  id                       SERIAL PRIMARY KEY,
+  numero_controle_pncp     TEXT REFERENCES editais,
+  item_numero              SMALLINT,
+  fornecedor_cnpj          TEXT,
+  fornecedor_nome          TEXT,
+  valor_unitario_final     NUMERIC(15,2),
+  valor_total_final        NUMERIC(15,2),
+  quantidade_homologada    NUMERIC(10,4),
+  data_homologacao         DATE
+);
+
+CREATE TABLE software_catalog (
+  id               SERIAL PRIMARY KEY,
+  nome_normalizado TEXT UNIQUE NOT NULL,
+  fabricante       TEXT,
+  categoria        TEXT,
+  subcategoria     TEXT,
+  aliases          TEXT[],
+  atualizado_em    TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE demanda_diaria (
+  id                SERIAL PRIMARY KEY,
+  software_id       INT REFERENCES software_catalog,
+  data              DATE,
+  editais_abertos   INT DEFAULT 0,
+  editais_encerrados INT DEFAULT 0,
+  valor_medio       NUMERIC(15,2),
+  quantidade_total  NUMERIC(12,2),
+  UNIQUE (software_id, data)
+);
+Índices essenciais
+sql
+CREATE INDEX ON editais (data_fim_vigencia) WHERE cancelado = FALSE;
+CREATE INDEX ON editais (orgao_cnpj);
+CREATE INDEX ON editais (tem_resultado) WHERE tem_resultado = TRUE;
+CREATE INDEX ON itens (software_nome);
+CREATE INDEX ON itens (ncm_codigo);
+CREATE INDEX ON demanda_diaria (software_id, data DESC);
+CREATE INDEX ON software_catalog USING GIN (aliases);
+O índice GIN em aliases permite buscar WHERE 'AUTO CAD LT' = ANY(aliases) de forma eficiente — fundamental para a normalização de nomes.
+
+Quer que eu gere o código Python do coletor que popula esse schema, ou o script de normalização com Gemini?
+
+
+publica
+
+contem
+
+anexa
+
+registra
+
+processado_em
+
+agrega
+
+orgaos
+
+text
+
+cnpj
+
+PK
+
+text
+
+nome
+
+text
+
+esfera_id
+
+text
+
+poder_id
+
+text
+
+uf
+
+text
+
+municipio_nome
+
+int
+
+municipio_id
+
+editais
+
+text
+
+numero_controle_pncp
+
+PK
+
+text
+
+orgao_cnpj
+
+FK
+
+int
+
+ano
+
+int
+
+numero_sequencial
+
+text
+
+modalidade_nome
+
+text
+
+situacao_nome
+
+text
+
+tipo_nome
+
+timestamp
+
+data_publicacao
+
+timestamp
+
+data_fim_vigencia
+
+bool
+
+tem_resultado
+
+bool
+
+cancelado
+
+float
+
+valor_global
+
+text
+
+status_coleta
+
+timestamp
+
+coletado_em
+
+itens
+
+serial
+
+id
+
+PK
+
+text
+
+numero_controle_pncp
+
+FK
+
+int
+
+numero_item
+
+text
+
+descricao_raw
+
+text
+
+software_nome
+
+text
+
+fabricante
+
+text
+
+tipo_licenca
+
+float
+
+quantidade
+
+float
+
+valor_unitario_estimado
+
+float
+
+valor_total
+
+bool
+
+orcamento_sigiloso
+
+text
+
+ncm_codigo
+
+text
+
+situacao_nome
+
+bool
+
+tem_resultado
+
+documentos
+
+serial
+
+id
+
+PK
+
+text
+
+numero_controle_pncp
+
+FK
+
+int
+
+sequencial
+
+text
+
+tipo
+
+text
+
+titulo
+
+text
+
+url_download
+
+text
+
+status_processamento
+
+timestamp
+
+processado_em
+
+extracao_ia
+
+serial
+
+id
+
+PK
+
+int
+
+documento_id
+
+FK
+
+text
+
+software_nome
+
+text
+
+fabricante
+
+text
+
+tipo_licenca
+
+int
+
+prazo_meses
+
+float
+
+valor_estimado
+
+bool
+
+marca_exigida
+
+bool
+
+permite_equivalente
+
+text
+
+requisitos_json
+
+float
+
+confianca
+
+text
+
+modelo_ia
+
+timestamp
+
+criado_em
+
+resultados
+
+serial
+
+id
+
+PK
+
+text
+
+numero_controle_pncp
+
+FK
+
+int
+
+item_numero
+
+text
+
+fornecedor_cnpj
+
+text
+
+fornecedor_nome
+
+float
+
+valor_unitario_final
+
+float
+
+valor_total_final
+
+int
+
+quantidade_homologada
+
+timestamp
+
+data_homologacao
+
+software_catalog
+
+serial
+
+id
+
+PK
+
+text
+
+nome_normalizado
+
+UK
+
+text
+
+fabricante
+
+text
+
+categoria
+
+text
+
+subcategoria
+
+text[]
+
+aliases
+
+timestamp
+
+atualizado_em
+
+demanda_diaria
+
+serial
+
+id
+
+PK
+
+int
+
+software_id
+
+FK
+
+date
+
+data
+
+int
+
+editais_abertos
+
+int
+
+editais_encerrados
+
+float
+
+valor_medio
+
+float
+
+quantidade_total
+
+Pesquisou na webPesquisou na webPerfeito — tenho tudo que preciso. Deixa eu montar o mapa completo de nichos + stack recomendada para os seus devs.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetAgora a stack tecnológica para seus devs construírem o sistema:
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widget
+Análise dos nichos — o que os dados reais mostram
+O mercado de compras públicas no Brasil movimentou mais de R$ 1,5 trilhão em 2024, com mais de 1,2 milhão de licitações só no governo federal. Elicitacao Dentro disso, software é um dos segmentos que mais cresce porque a Lei 14.133/2021 obrigou todos os órgãos a modernizar sistemas.
+Por que GIS é o nicho de ouro escondido:
+Prefeituras contratam empresas para atualização do cadastro imobiliário municipal, base cartográfica, plano diretor e implantação de sistema de informação geográfica web, com contratos de 12 meses prorrogáveis até 60 meses. Licitaja Isso significa que um único contrato pode render 5 anos de receita. E a concorrência é muito menor do que em ERP — menos empresas sabem fazer.
+Por que ERP municipal é volume garantido:
+Prefeituras contratam software de gestão pública sem limitação de usuários, incluindo instalação, conversão, testes, customização e manutenção mensal. Alertalicitacao São 5.570 prefeituras no Brasil, a maioria pequena e mal atendida pelos grandes players como TOTVS e Betha, que focam nas maiores.
+Por que saúde tem urgência:
+A Secretaria Municipal de Saúde de São Paulo contratou em 2024 sistema de gestão de consumo em modelo SaaS. Alertalicitacao Com a RNDS (Rede Nacional de Dados em Saúde) sendo obrigatória, todo município precisa de prontuário eletrônico integrado — criando demanda contínua.
+
+Resumo da stack para passar para os devs
+CamadaTecnologiaMotivoFrontendNext.js 14 + Tailwind + shadcnSSR, dashboards rápidos, deploy trivialGráficosRecharts + TanStack TableRankings e tabelas filtráveisBackendPython + FastAPIMesma linguagem do coletor + IAFilasCelery + RedisPDF processing assíncronoIAGemini 2.0 FlashLê PDF nativo, barato, contexto grandeBancoPostgreSQL via SupabaseAuth grátis + realtime inclusoDeployVercel (front) + Railway (back)Zero infra para MVPAlertasTelegram Bot + Resend emailCusto zero no início
+Ordem de construção recomendada para os devs:
+
+Coletor Python (PNCP API → PostgreSQL) — 2 semanas
+Dashboard básico Next.js com listagem de editais — 1 semana
+Sistema de alertas Telegram — 3 dias
+Integração Gemini para leitura de PDFs — 1 semana
+Analytics de demanda e ranking — 2 semanas
+Multi-tenant + cobrança (Stripe) — 2 semanas
+
+Dados suficientes. Agora vou montar o plano completo e visual.Tudo que preciso. Vou montar o plano completo em três partes visuais: mapa do mercado, mapa de concorrentes e funil de vendas para prefeituras.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetAgora o funil de vendas — como efetivamente chegar até o prefeito e vencer o pregão.
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widget
+O que a pesquisa revelou sobre esse mercado
+O líder tem um ponto cego enorme. A Geopixel, fundada em 2007 e reconhecida como líder no segmento, atende mais de 100 prefeituras em todo o país. LinkedIn Parece muito até você perceber que existem 5.570 municípios no Brasil — a Geopixel atende menos de 2% do mercado potencial, e foca nos maiores.
+O argumento de venda que fecha contratos. Em Guaratinguetá (120 mil hab.), o geoprocessamento permitiu quase duplicar o lançamento de IPTU, ITBI e taxas municipais. Em Amparo (70 mil hab.), foram identificados mais de 950 mil novos metros quadrados de área construída, gerando mais de R$ 10 milhões por ano adicionais, além de 1.400 novos imóveis que não constavam no cadastro. Geopixel Esse número — o projeto se paga com a própria arrecadação recuperada — é o argumento que você leva para o secretário de fazenda e ele assina na hora.
+O que o produto precisa entregar. Para prefeituras, o geoprocessamento serve para monitoramento do uso do solo, planejamento urbano, gestão tributária com verificação de discrepâncias em dados cadastrais garantindo a cobrança justa de impostos como o IPTU, monitoramento ambiental e prevenção de desastres. Geopixel Esses são os módulos que precisam estar no seu produto, nessa ordem de prioridade comercial — o IPTU é o que abre portas.
+SaaS é o modelo certo. Para uma prefeitura, o modelo SaaS pode representar uma economia de até 30% em comparação com sistemas tradicionais, além de atualizações automáticas sem custos adicionais e integração com ERP e bancos de dados municipais. Geopixel
+
+Plano de produto para seus devs — stack GIS específica
+Além do Next.js + FastAPI que já definimos, GIS precisa de bibliotecas específicas:
+ComponenteTecnologiaFunçãoBanco geoespacialPostgreSQL + PostGISArmazenar geometrias de lotes, edificaçõesMapas no frontendMapbox GL JS ou LeafletMapa interativo 100% webAnálise espacialGDAL + Shapely (Python)Buffer, intersect, overlayImagens de satéliteGoogle Earth Engine APIDetecção de mudanças, atualização contínuaVisualização de dadosDeckGLMapas de calor, animações de densidadeServiço de tilesGeoServer (open source)Servir camadas de mapa em WMS/WFS
+Módulos do produto, em ordem de construção:
+
+Cadastro técnico multifinalitário (CTM) com mapa — o core
+Painel de comparação "cadastro vs satélite" — o argumento de venda
+Relatório de IPTU potencial não arrecadado — o que fecha o contrato
+App mobile para fiscalização em campo — diferenciador técnico
+Integração com sistemas de tributação municipais — fidelização
+
+Queries PNCP para monitorar esse nicho:
+/api/search?q=geoprocessamento+cadastro+imobiliário
+/api/search?q=sistema+informações+geográficas+prefeitura
+/api/search?q=CTM+multifinalitário+mapeamento
+/api/search?q=planta+genérica+valores+SIG
+/api/search?q=aerolevantamento+cadastro+municipal
+Quer que eu monte agora o pitch deck para apresentar para prefeituras, ou o código do módulo de mapa interativo com PostGIS?
