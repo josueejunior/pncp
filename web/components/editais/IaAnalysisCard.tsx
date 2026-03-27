@@ -92,11 +92,11 @@ export function IaAnalysisCard({ extracao }: Props) {
     fabricante:          extracao.fabricante           ?? MOCK_ANALYSIS.fabricante,
     tipo_licenca:        extracao.tipo_licenca         ?? MOCK_ANALYSIS.tipo_licenca,
     quantidade:          extracao.quantidade != null   ? String(extracao.quantidade) + " licenças" : analysis.quantidade,
-    prazo_meses:         extracao.prazo_meses != null  ? String(extracao.prazo_meses) + " meses" : MOCK_ANALYSIS.prazo_meses,
-    valor_estimado:      extracao.valor_estimado != null ? `R$ ${extracao.valor_estimado.toLocaleString("pt-BR")}` : MOCK_ANALYSIS.valor_estimado,
+    prazo_meses:         extracao.prazo_meses != null  ? String(extracao.prazo_meses) + " meses" : analysis.prazo_meses,
+    valor_estimado:      extracao.valor_estimado != null ? `R$ ${extracao.valor_estimado.toLocaleString("pt-BR")}` : analysis.valor_estimado,
     marca_exigida:       extracao.marca_exigida,
     permite_equivalente: extracao.permite_equivalente,
-    criterio_julgamento: extracao.criterio_julgamento  ?? MOCK_ANALYSIS.criterio_julgamento,
+    criterio_julgamento: extracao.criterio_julgamento  ?? analysis.criterio_julgamento,
     resumo:              extracao.resumo               ?? MOCK_ANALYSIS.resumo,
   } : MOCK_ANALYSIS;
 
@@ -124,15 +124,15 @@ export function IaAnalysisCard({ extracao }: Props) {
     { label: "Fabricante",      value: analysis.fabricante,          delay: 80               },
     { label: "Tipo de Licença", value: analysis.tipo_licenca,        delay: 160              },
     { label: "Quantidade",      value: analysis.quantidade,          delay: 240, highlight: "green" },
-    { label: "Prazo",           value: MOCK_ANALYSIS.prazo_meses,         delay: 320              },
-    { label: "Valor Estimado",  value: MOCK_ANALYSIS.valor_estimado,      delay: 400, highlight: "green" },
-    { label: "Critério",        value: MOCK_ANALYSIS.criterio_julgamento, delay: 480              },
-    { label: "Marca Exigida",   value: MOCK_ANALYSIS.marca_exigida ? "Sim — exclusivo" : "Não", delay: 560, highlight: MOCK_ANALYSIS.marca_exigida ? "yellow" : "green" },
+    { label: "Prazo",           value: analysis.prazo_meses,         delay: 320              },
+    { label: "Valor Estimado",  value: analysis.valor_estimado,      delay: 400, highlight: "green" },
+    { label: "Critério",        value: analysis.criterio_julgamento, delay: 480              },
+    { label: "Marca Exigida",   value: analysis.marca_exigida ? "Sim — exclusivo" : "Não", delay: 560, highlight: analysis.marca_exigida ? "yellow" : "green" },
   ];
 
   const oportunidadeColor =
-    MOCK_ANALYSIS.oportunidade === "alta" ? "var(--clr-green)" :
-    MOCK_ANALYSIS.oportunidade === "media" ? "var(--clr-yellow)" :
+    analysis.oportunidade === "alta" ? "var(--clr-green)" :
+    analysis.oportunidade === "media" ? "var(--clr-yellow)" :
     "var(--clr-red)";
 
   return (

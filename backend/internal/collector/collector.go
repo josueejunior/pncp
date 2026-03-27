@@ -285,45 +285,115 @@ func (c *Collector) collectResultado(ctx context.Context, raw *pncp.EditalRaw) {
 	`, raw.NumeroControlePNCP, res.FornecedorCNPJ, res.FornecedorNome, res.ValorFinal, res.DataResultado)
 }
 
-// calculateScore calcula o score de oportunidade (0–100).
+// calculateScore implementa o algoritmo completo de score (0–100).
+//
+// Critérios (fonte: api_pncp — seção 5):
+//   30pts — prazo para encerrar  (7–15 dias ideal)
+//   25pts — valor estimado       (≥ R$50k = max)
+//   20pts — concorrência         (sem fornecedor fixo no órgão)
+//   15pts — esfera               (municipal = menos concorrência especializada)
+//   10pts — marca                (sem exigência = mais competição, mas permite entrada)
 func (c *Collector) calculateScore(ctx context.Context, raw *pncp.EditalRaw) {
-	now := time.Now()
-	score := 0
+	scorePrazo, scoreValor, scoreConcorrencia, scoreEsfera, scoreMarca := 0, 0, 0, 0, 0
 
-	// Prazo (30pts): 7–15 dias = máximo
-	diasRestantes := int(time.Until(now.AddDate(0, 0, 15)).Hours() / 24) // placeholder
-	_ = diasRestantes
-	// TODO: usar raw.DataFimVigencia quando parseado
-
-	// Valor (25pts)
-	if raw.ValorTotal >= 50_000 {
-		score += 25
-	} else if raw.ValorTotal >= 20_000 {
-		score += 15
-	} else if raw.ValorTotal > 0 {
-		score += 8
+	// ── 1. Prazo (30pts) ─────────────────────────────────────
+	dias := int(time.Until(raw.DataFimVigencia).Hours() / 24)
+	switch {
+	case dias >= 7 && dias <= 15:
+		scorePrazo = 30 // janela ideal
+	case dias > 15 && dias <= 30:
+		scorePrazo = 20
+	case dias > 30:
+		scorePrazo = 10
+	case dias >= 3 && dias < 7:
+		scorePrazo = 15 // ainda dá, mas corrido
+	case dias >= 0 && dias < 3:
+		scorePrazo = 0 // urgência demais
 	}
 
-	// Esfera (15pts): municipal = mais oportunidade
+	// ── 2. Valor (25pts) ─────────────────────────────────────
+	switch {
+	case raw.ValorTotal >= 200_000:
+		scoreValor = 25
+	case raw.ValorTotal >= 50_000:
+		scoreValor = 20
+	case raw.ValorTotal >= 20_000:
+		scoreValor = 12
+	case raw.ValorTotal > 0:
+		scoreValor = 6
+	case raw.OrcamentoSigiloso:
+		scoreValor = 15 // sigiloso = assume ticket razoável
+	}
+
+	// ── 3. Concorrência (20pts) — sem fornecedor repetido no órgão ──
+	var vitoriasMesmoFornecedor int
+	c.db.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT r.fornecedor_cnpj)
+		FROM resultados r
+		JOIN editais e ON e.numero_controle_pncp = r.numero_controle_pncp
+		WHERE e.orgao_cnpj = $1
+		GROUP BY r.fornecedor_cnpj
+		ORDER BY COUNT(*) DESC
+		LIMIT 1
+	`, raw.OrgaoCNPJ).Scan(&vitoriasMesmoFornecedor)
+
+	switch {
+	case vitoriasMesmoFornecedor == 0:
+		scoreConcorrencia = 20 // mercado aberto
+	case vitoriasMesmoFornecedor <= 2:
+		scoreConcorrencia = 12
+	case vitoriasMesmoFornecedor <= 5:
+		scoreConcorrencia = 6
+	default:
+		scoreConcorrencia = 2 // fornecedor dominante
+	}
+
+	// ── 4. Esfera (15pts) ────────────────────────────────────
 	switch raw.EsferaID {
 	case "M":
-		score += 15
+		scoreEsfera = 15 // municipal: menos concorrência especializada
 	case "E":
-		score += 8
+		scoreEsfera = 8
+	case "F":
+		scoreEsfera = 4
 	}
 
-	// Orçamento não sigiloso (bonus)
-	if !raw.OrcamentoSigiloso {
-		score += 5
+	// ── 5. Exigência de marca (10pts) ────────────────────────
+	// Sem exigência = mais competição mas permite entrada
+	// Com exigência = exclusivo, menos competição
+	// Verificamos via extração IA se disponível
+	var marcaExigida bool
+	c.db.QueryRow(ctx, `
+		SELECT COALESCE(ei.marca_exigida, false)
+		FROM documentos d
+		LEFT JOIN extracao_ia ei ON ei.documento_id = d.id
+		WHERE d.numero_controle_pncp = $1 AND d.tipo ILIKE '%edital%'
+		LIMIT 1
+	`, raw.NumeroControlePNCP).Scan(&marcaExigida)
+
+	if marcaExigida {
+		scoreMarca = 10 // exclusivo — se você é revendedor autorizado, zero concorrência
+	} else {
+		scoreMarca = 5 // permite equivalentes
 	}
+
+	total := min(scorePrazo+scoreValor+scoreConcorrencia+scoreEsfera+scoreMarca, 100)
 
 	c.db.Exec(ctx, `
-		INSERT INTO scores (numero_controle_pncp, score)
-		VALUES ($1, $2)
+		INSERT INTO scores (
+			numero_controle_pncp, score,
+			score_prazo, score_valor, score_concorrencia, score_esfera, score_marca
+		) VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (numero_controle_pncp) DO UPDATE SET
-			score        = EXCLUDED.score,
-			calculado_em = now()
-	`, raw.NumeroControlePNCP, min(score, 100))
+			score              = EXCLUDED.score,
+			score_prazo        = EXCLUDED.score_prazo,
+			score_valor        = EXCLUDED.score_valor,
+			score_concorrencia = EXCLUDED.score_concorrencia,
+			score_esfera       = EXCLUDED.score_esfera,
+			score_marca        = EXCLUDED.score_marca,
+			calculado_em       = now()
+	`, raw.NumeroControlePNCP, total,
+		scorePrazo, scoreValor, scoreConcorrencia, scoreEsfera, scoreMarca)
 }
 
 func nullableFloat(f float64) interface{} {
